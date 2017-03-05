@@ -14,6 +14,8 @@ import config
 
 board_url = config.BOARD_URL
 
+DATETIME_FORMAT = "%b %d %Y, %I:%M %p"
+
 logging.basicConfig(level=logging.INFO)
 
 class FailedToLogInError(Exception): pass
@@ -58,6 +60,21 @@ class Topic():
     def __str__(self):
         return "Topic({}, {})".format(self.id, self.title)
 
+@attrs
+class Post():
+    id = attrib(convert=int)
+    url = attrib()
+    edit_url = attrib()
+    topic_id = attrib()
+    user_id = attrib()
+    number = attrib()
+    post_datetime = attrib()
+    ip = attrib()
+    post_html = attrib()
+    
+    def __str__(self):
+        return "Post({}, {}...)".format(self.id, self.post_html[0:20])
+
 class ZetaboardsScraper():
     def __init__(self, board_url):
         self.board_url = board_url
@@ -67,7 +84,6 @@ class ZetaboardsScraper():
         self.topics = []
         
         self.session = requests.Session()
-        self.session.headers.update({'User-agent': 'Mozilla/5.0 (X11; Fedora; Linux x86_64; rv:51.0) Gecko/20100101 Firefox/51.0'})
     
     def get(self, url):
         logging.info("GET {}".format(url))
@@ -156,13 +172,13 @@ class ZetaboardsScraper():
                 description = tr.find(class_='description').text.strip(),
                 tags        = None,
                 pinned      = tr.find(class_='c_cat-title').text.startswith("Pinned:"),
-                start_date  = tr.find(class_='c_cat-title').a['title'], # XXX
+                start_date  = tr.find(class_='c_cat-title').a['title'],
                 starter_id  = tr.find(class_='c_cat-starter').a['href'].split('/')[-2],
                 num_replies = tr.find(class_='c_cat-replies').text.replace(',', ''),
                 num_views   = tr.find(class_='c_cat-views').text.split()[0].replace(',', '')
             )
             
-            topic.start_date = datetime.strptime(topic.start_date.split("Start Date ")[1], "%b %d %Y, %I:%M %p")
+            topic.start_date = datetime.strptime(topic.start_date.split("Start Date ")[1], DATETIME_FORMAT)
             
             topics.append(topic)
         
@@ -183,11 +199,34 @@ class ZetaboardsScraper():
             topics = self.scrape_forum_page(forum, page)
             forum_topics += topics
         
-        logging.info("Scraped {} threads from forum {}".format(len(forum_topics), forum))
+        logging.info("Scraped {} topics from forum {}".format(len(forum_topics), forum))
         self.topics += forum_topics
 
-    def scrape_thread_page(self, thread):
-        pass
+    def scrape_topic_page(self, topic):
+        soup = self.get(topic.url)
+        
+        posts = []
+        
+        table = soup.find('table', id='topic_viewer')
+        
+        topic_trs = table.find_all('tr')[2:-2]
+        for post_trs in [topic_trs[i:i+5] for i in range(0, len(topic_trs), 5)]:
+            trs = post_trs
+            postinfo = trs[0].find('td', class_='c_postinfo')
+            post = Post(
+                id          = trs[0]['id'].split('-')[1],
+                url         = postinfo.a['href'],
+                edit_url    = trs[3].find('td', class_='c_footicons').find(class_='left').a['href'],
+                topic_id   = topic.id,
+                user_id     = trs[0].find('a', class_='member')['href'].split('/')[-2],
+                number      = postinfo.a.text.split("#")[-1],
+                post_datetime = datetime.strptime(postinfo.find(class_='left').text.strip(), DATETIME_FORMAT),
+                ip          = postinfo.find(class_='right').find(class_='desc').text.split('IP: ')[1].strip(),
+                post_html   = trs[1].find('td', class_='c_post').encode_contents().strip()
+            )
+            posts.append(post)
+        
+        return posts
         
 
 zs = ZetaboardsScraper(board_url)
@@ -199,3 +238,8 @@ print(zs.fora[0])
 zs.scrape_forum(zs.fora[0])
 for topic in zs.topics:
     print("* {}".format(topic))
+
+print("posts:")
+posts = zs.scrape_topic_page(zs.topics[0])
+for p in posts:
+    print("* {}".format(p))
