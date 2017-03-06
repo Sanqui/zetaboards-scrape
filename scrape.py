@@ -14,6 +14,9 @@ import config
 
 board_url = config.BOARD_URL
 
+CASSETTE_LIBRARY_DIR = 'cassettes/'
+CASSETTE_NAME = None
+
 DATETIME_FORMAT = "%b %d %Y, %I:%M %p"
 
 logging.basicConfig(level=logging.INFO)
@@ -94,6 +97,9 @@ class ZetaboardsScraper():
         self.posts = []
         
         self.session = requests.Session()
+        self.recorder = betamax.Betamax(
+            self.session, cassette_library_dir=CASSETTE_LIBRARY_DIR
+        )
     
     def get(self, url):
         logging.info("GET {}".format(url))
@@ -240,20 +246,31 @@ class ZetaboardsScraper():
         logging.info("Scraped {} posts from topic {}".format(len(topic_posts), topic))
         self.posts += topic_posts
     
+    
+    def scrape_all(self):
+        self.scrape_front()
+        for forum in self.fora:
+            self.scrape_forum(forum)
+        
+        for topic in self.topics:
+            self.scrape_topic(topic)
 
 zs = ZetaboardsScraper(board_url)
 zs.login(config.USERNAME, config.PASSWORD)
-zs.scrape_front()
 
-print(zs.fora[0])
-#t = zs.scrape_forum_page(zs.fora[0], 1)
-zs.scrape_forum(zs.fora[0])
-for topic in zs.topics:
+if CASSETTE_NAME:
+    with zs.recorder.use_cassette(CASSETTE_NAME):
+        zs.scrape_all()
+else:
+    zs.scrape_all()
+
+print("20/{} topics:".format(len(zs.topics)))
+
+for topic in zs.topics[0:30]:
     print("* {}".format(topic))
 
-print("posts:")
-for i in range(0, 5):
-    zs.scrape_topic(zs.topics[i])
+print("20/{} posts:".format(len(zs.posts)))
 
-for p in zs.posts:
+for p in zs.posts[0:30]:
     print("* {}".format(p))
+
