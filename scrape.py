@@ -75,6 +75,15 @@ class Post():
     def __str__(self):
         return "Post({}, {}...)".format(self.id, self.post_html[0:20])
 
+def get_last_page(soup):
+    ul_pages = soup.find('ul', class_='cat-pages')
+    if ul_pages:
+        last_page = int(soup.find_all('li')[-1].text.strip())
+    else:
+        last_page = 1
+    
+    return last_page
+
 class ZetaboardsScraper():
     def __init__(self, board_url):
         self.board_url = board_url
@@ -82,6 +91,7 @@ class ZetaboardsScraper():
         self.categories = None
         self.fora = None
         self.topics = []
+        self.posts = []
         
         self.session = requests.Session()
     
@@ -156,6 +166,7 @@ class ZetaboardsScraper():
     def scrape_forum_page(self, forum, page):
         soup = self.get("{}{}/?x={}".format(forum.url, page, 90))
         
+        last_page = get_last_page(soup)        
         topics = []
         
         for tr in soup.find('table', class_='posts').find_all('tr'):
@@ -182,29 +193,21 @@ class ZetaboardsScraper():
             
             topics.append(topic)
         
-        return topics
+        return topics, last_page
     
     def scrape_forum(self, forum):
-        soup = self.get(forum.url)
+        forum_topics, last_page = self.scrape_forum_page(forum, 1)
         
-        ul_pages = soup.find('ul', class_='cat-pages')
-        if ul_pages:
-            last_page = int(soup.find_all('li')[-1].a.text.strip())
-        else:
-            last_page = 1
-        
-        forum_topics = []
-        
-        for page in range(1, last_page+1):
-            topics = self.scrape_forum_page(forum, page)
-            forum_topics += topics
-        
+        for page in range(2, last_page+1):
+            forum_topics += self.scrape_forum_page(forum, page)[0]
+            
         logging.info("Scraped {} topics from forum {}".format(len(forum_topics), forum))
         self.topics += forum_topics
 
-    def scrape_topic_page(self, topic):
-        soup = self.get(topic.url)
+    def scrape_topic_page(self, topic, page):
+        soup = self.get("{}{}/?x={}".format(topic.url, page, 90))
         
+        last_page = get_last_page(soup)
         posts = []
         
         table = soup.find('table', id='topic_viewer')
@@ -226,8 +229,17 @@ class ZetaboardsScraper():
             )
             posts.append(post)
         
-        return posts
+        return posts, last_page
+    
+    def scrape_topic(self, topic):
+        topic_posts, last_page = self.scrape_topic_page(topic, 1)
         
+        for page in range(2, last_page+1):
+            topic_posts += self.scrape_topic_page(topic, page)[0]
+        
+        logging.info("Scraped {} posts from topic {}".format(len(topic_posts), topic))
+        self.posts += topic_posts
+    
 
 zs = ZetaboardsScraper(board_url)
 zs.login(config.USERNAME, config.PASSWORD)
@@ -240,6 +252,8 @@ for topic in zs.topics:
     print("* {}".format(topic))
 
 print("posts:")
-posts = zs.scrape_topic_page(zs.topics[0])
-for p in posts:
+for i in range(0, 5):
+    zs.scrape_topic(zs.topics[i])
+
+for p in zs.posts:
     print("* {}".format(p))
