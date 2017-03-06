@@ -15,7 +15,7 @@ import config
 board_url = config.BOARD_URL
 
 CASSETTE_LIBRARY_DIR = 'cassettes/'
-CASSETTE_NAME = None
+CASSETTE_NAME = sys.argv[1] if len(sys.argv) > 1 else None
 
 DATETIME_FORMAT = "%b %d %Y, %I:%M %p"
 
@@ -78,6 +78,11 @@ class Post():
     def __str__(self):
         return "Post({}, {}...)".format(self.id, self.post_html[0:20])
 
+@attrs
+class PostSource():
+    id = attrib(convert=int)
+    post_source = attrib()
+
 def get_last_page(soup):
     ul_pages = soup.find('ul', class_='cat-pages')
     if ul_pages:
@@ -95,6 +100,7 @@ class ZetaboardsScraper():
         self.fora = None
         self.topics = []
         self.posts = []
+        self.post_sources = []
         
         self.session = requests.Session()
         self.recorder = betamax.Betamax(
@@ -246,6 +252,15 @@ class ZetaboardsScraper():
         logging.info("Scraped {} posts from topic {}".format(len(topic_posts), topic))
         self.posts += topic_posts
     
+    def scrape_post_source(self, post):
+        soup = self.get(post.edit_url)
+        
+        post_source = PostSource(
+            id = post.id,
+            post_source = soup.find('textarea', id='c_post-text').text.strip()
+        )
+        
+        self.post_sources.append(post_source)
     
     def scrape_all(self):
         self.scrape_front()
@@ -254,6 +269,9 @@ class ZetaboardsScraper():
         
         for topic in self.topics:
             self.scrape_topic(topic)
+        
+        for post in self.posts:
+            self.scrape_post_source(post)
 
 zs = ZetaboardsScraper(board_url)
 zs.login(config.USERNAME, config.PASSWORD)
@@ -273,4 +291,9 @@ print("20/{} posts:".format(len(zs.posts)))
 
 for p in zs.posts[0:30]:
     print("* {}".format(p))
+
+print("{} post sources.".format(len(zs.post_sources)))
+
+#for p in zs.post_sources[0:30]:
+#    print("* {}".format(p))
 
