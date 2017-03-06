@@ -93,23 +93,25 @@ def get_last_page(soup):
     return last_page
 
 class ZetaboardsScraper():
-    def __init__(self, board_url):
+    def __init__(self, board_url, board_admin_url):
         self.board_url = board_url
+        self.board_admin_url = board_admin_url
         assert not board_url.endswith("index/")
         self.categories = None
         self.fora = None
         self.topics = []
         self.posts = []
         self.post_sources = []
+        self.member_ids = []
         
         self.session = requests.Session()
         self.recorder = betamax.Betamax(
             self.session, cassette_library_dir=CASSETTE_LIBRARY_DIR
         )
     
-    def get(self, url):
+    def get(self, url, *args, **kwargs):
         logging.info("GET {}".format(url))
-        r = self.session.get(url)
+        r = self.session.get(url, *args, **kwargs)
         soup = BS(r.text, 'html.parser')
         return soup
         
@@ -126,6 +128,9 @@ class ZetaboardsScraper():
         login_page = self.post(self.board_url+'login/log_in/', data=data)
         if login_page.find(id='top_info').find('strong').get_text() != username:
             raise FailedToLogInError()
+        
+        data = {'land': 'menu=idx', 'name': username, 'pass': password}
+        login_page_admin = self.post(self.board_admin_url+'?menu=login', data=data)
     
     def scrape_front(self):
         soup = self.get(self.board_url)
@@ -262,8 +267,38 @@ class ZetaboardsScraper():
         
         self.post_sources.append(post_source)
     
+    def scrape_member_list_page(self, page):
+        # http://s1.zetaboards.com/Craft_Laboratory/members/?sort=join_unix&order=a
+        params = {'sort': 'join_unix', 'order': 'a'}
+        soup = self.get(self.board_url+"members/{}".format(page), params=params)
+        
+        last_page = get_last_page(soup)
+        
+        member_ids = []
+        
+        for tr in soup.find('table', id="member_list_full").find_all('tr', class_=['row1', 'row2']):
+            tds = tr.find_all('td')
+            
+            member_ids.append(int(tds[0].a['href'].split('/')[-2]))
+        
+        return member_ids, last_page
+        
+    def scrape_member_list(self):
+        member_ids, last_page = self.scrape_member_list_page(1)
+        
+        for page in range(2, last_page+1):
+            member_ids += self.scrape_member_list_page(topic, page)[0]
+        
+        logging.info("Scraped {} member ids".format(len(member_ids)))
+        self.member_ids = member_ids
+        
+    
     def scrape_all(self):
         self.scrape_front()
+        
+        self.scrape_member_list()
+        
+        return
         for forum in self.fora:
             self.scrape_forum(forum)
         
@@ -273,7 +308,7 @@ class ZetaboardsScraper():
         for post in self.posts:
             self.scrape_post_source(post)
 
-zs = ZetaboardsScraper(board_url)
+zs = ZetaboardsScraper(board_url, config.BOARD_ADMIN_URL)
 zs.login(config.USERNAME, config.PASSWORD)
 
 if CASSETTE_NAME:
