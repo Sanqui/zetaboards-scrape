@@ -5,8 +5,11 @@ import betamax
 from attr import attrs, attrib
 import logging
 import sys
+import time
 from datetime import datetime
 from pprint import pprint
+import parsedatetime
+cal = parsedatetime.Calendar()
 
 from pdb import set_trace as bp
 
@@ -17,11 +20,47 @@ board_url = config.BOARD_URL
 CASSETTE_LIBRARY_DIR = 'cassettes/'
 CASSETTE_NAME = sys.argv[1] if len(sys.argv) > 1 else None
 
-DATETIME_FORMAT = "%b %d %Y, %I:%M %p"
+TEST_MAX = 20
 
-logging.basicConfig(level=logging.INFO)
+DATETIME_FORMAT = "%b %d %Y, %I:%M %p"
+def zetadate(string):
+    try:
+        return datetime.strptime(string, DATETIME_FORMAT)
+    except ValueError:
+        # ZetaBoards sometimes uses dates like "15 minutes ago",
+        # so here's hoping parsedatetime will handle them all
+        time_struct, parse_status = cal.parse(string)
+        return time_struct
+
+logging.basicConfig(level=logging.INFO,
+    format='%(asctime)-15s %(levelname)-8s %(message)s')
 
 class FailedToLogInError(Exception): pass
+
+@attrs
+class Member():
+    id = attrib(convert=int)
+    name = attrib()
+    register_ip = attrib()
+    last_active = attrib()
+    email = attrib()
+    post_count = attrib(convert=int)
+    warning_level = attrib(convert=int)
+    group_id = attrib(convert=int)
+    title = attrib()
+    location = attrib()
+    aim = attrib()
+    yim = attrib()
+    msn = attrib()
+    homepage = attrib()
+    interests = attrib()
+    signature = attrib()
+    photo_url = attrib()
+    avatar_url = attrib()
+    custom_fields = attrib()
+    
+    def __str__(self):
+        return "Member({}, {})".format(self.id, self.name)
 
 @attrs
 class Category():
@@ -54,6 +93,7 @@ class Topic():
     title = attrib()
     description = attrib()
     tags = attrib()
+    mark = attrib()
     pinned = attrib()
     start_date = attrib()
     starter_id = attrib(convert=int)
@@ -62,6 +102,14 @@ class Topic():
     
     def __str__(self):
         return "Topic({}, {})".format(self.id, self.title)
+
+@attrs
+class MovedTopic():
+    topic_id = attrib(convert=int)
+    from_forum_id = attrib(convert=int)
+    
+    def __str__(self):
+        return "MovedTopic({})".format(self.id)
 
 @attrs
 class Post():
@@ -103,21 +151,27 @@ class ZetaboardsScraper():
         self.posts = []
         self.post_sources = []
         self.member_ids = []
+        self.members = []
         
         self.session = requests.Session()
+        
         self.recorder = betamax.Betamax(
             self.session, cassette_library_dir=CASSETTE_LIBRARY_DIR
         )
     
     def get(self, url, *args, **kwargs):
-        logging.info("GET {}".format(url))
-        r = self.session.get(url, *args, **kwargs)
+        r = requests.Request("GET", url, *args, **kwargs)
+        r = self.session.prepare_request(r)
+        logging.info("GET {}".format(r.url))
+        r = self.session.send(r)
         soup = BS(r.text, 'html.parser')
         return soup
         
     def post(self, url, *args, **kwargs):
-        logging.info("POST {}".format(url))
-        r = self.session.post(url, *args, **kwargs)
+        r = requests.Request("POST", url, *args, **kwargs)
+        r = self.session.prepare_request(r)
+        logging.info("POST {}".format(r.url))
+        r = self.session.send(r)
         soup = BS(r.text, 'html.parser')
         return soup
     
@@ -129,8 +183,12 @@ class ZetaboardsScraper():
         if login_page.find(id='top_info').find('strong').get_text() != username:
             raise FailedToLogInError()
         
-        data = {'land': 'menu=idx', 'name': username, 'pass': password}
+        data = {'name': username, 'pass': password}
         login_page_admin = self.post(self.board_admin_url+'?menu=login', data=data)
+        
+        submenu = login_page_admin.find(id='submenu')
+        if not submenu or submenu.find('strong').get_text() != username:
+            raise FailedToLogInError()
     
     def scrape_front(self):
         soup = self.get(self.board_url)
@@ -192,23 +250,34 @@ class ZetaboardsScraper():
             ul_pages = tr.find(class_='c_cat-title').find('ul', class_='cat-topicpages')
             if ul_pages:
                 ul_pages.decompose()
-            topic = Topic(
-                id          = tr.find(class_='c_cat-title').a['href'].split('/')[-2],
-                url         = tr.find(class_='c_cat-title').a['href'],
-                forum_id    = forum.id,
-                title       = tr.find(class_='c_cat-title').a.text.strip(),
-                description = tr.find(class_='description').text.strip(),
-                tags        = None,
-                pinned      = tr.find(class_='c_cat-title').text.startswith("Pinned:"),
-                start_date  = tr.find(class_='c_cat-title').a['title'],
-                starter_id  = tr.find(class_='c_cat-starter').a['href'].split('/')[-2],
-                num_replies = tr.find(class_='c_cat-replies').text.replace(',', ''),
-                num_views   = tr.find(class_='c_cat-views').text.split()[0].replace(',', '')
-            )
             
-            topic.start_date = datetime.strptime(topic.start_date.split("Start Date ")[1], DATETIME_FORMAT)
+            mark = tr.find_all(class_='c_cat-mark')[-1].img['alt']
+            topic_id = int(tr.find(class_='c_cat-title').a['href'].split('/')[-2])
             
-            topics.append(topic)
+            if mark != "Moved":            
+                topic = Topic(
+                    id          = topic_id,
+                    url         = tr.find(class_='c_cat-title').a['href'],
+                    forum_id    = forum.id,
+                    title       = tr.find(class_='c_cat-title').a.text.strip(),
+                    description = tr.find(class_='description').text.strip() if tr.find(class_='description') else None,
+                    tags        = None,
+                    mark        = mark,
+                    pinned      = tr.find(class_='c_cat-title').text.startswith("Pinned:"),
+                    start_date  = zetadate(tr.find(class_='c_cat-title').a['title'].split("Start Date ")[1]),
+                    starter_id  = tr.find(class_='c_cat-starter').a['href'].split('/')[-2],
+                    num_replies = tr.find(class_='c_cat-replies').text.replace(',', ''),
+                    num_views   = tr.find(class_='c_cat-views').text.split()[0].replace(',', '')
+                )
+                
+                topics.append(topic)
+            else:
+                moved_topic = MovedTopic(
+                    topic_id = topic_id,
+                    from_forum_id = forum.id
+                )
+                
+                topics.append(moved_topic)
         
         return topics, last_page
     
@@ -237,10 +306,10 @@ class ZetaboardsScraper():
                 id          = trs[0]['id'].split('-')[1],
                 url         = postinfo.a['href'],
                 edit_url    = trs[3].find('td', class_='c_footicons').find(class_='left').a['href'],
-                topic_id   = topic.id,
+                topic_id    = topic.id,
                 user_id     = trs[0].find('a', class_='member')['href'].split('/')[-2],
                 number      = postinfo.a.text.split("#")[-1],
-                post_datetime = datetime.strptime(postinfo.find(class_='left').text.strip(), DATETIME_FORMAT),
+                post_datetime = zetadate(postinfo.find(class_='left').text.strip()),
                 ip          = postinfo.find(class_='right').find(class_='desc').text.split('IP: ')[1].strip(),
                 post_html   = trs[1].find('td', class_='c_post').encode_contents().strip()
             )
@@ -268,7 +337,6 @@ class ZetaboardsScraper():
         self.post_sources.append(post_source)
     
     def scrape_member_list_page(self, page):
-        # http://s1.zetaboards.com/Craft_Laboratory/members/?sort=join_unix&order=a
         params = {'sort': 'join_unix', 'order': 'a'}
         soup = self.get(self.board_url+"members/{}".format(page), params=params)
         
@@ -287,35 +355,98 @@ class ZetaboardsScraper():
         member_ids, last_page = self.scrape_member_list_page(1)
         
         for page in range(2, last_page+1):
-            member_ids += self.scrape_member_list_page(topic, page)[0]
+            member_ids += self.scrape_member_list_page(page)[0]
         
         logging.info("Scraped {} member ids".format(len(member_ids)))
         self.member_ids = member_ids
+    
+    def scrape_member_edit_page(self, member_id):
+        params = {'menu': 'mem', 'c': '1', 'mid': member_id}
+        soup = self.get(self.board_admin_url, params=params)
         
+        form = soup.find('form')
+        assert form.id != 'loginform'
+        table = form.find('table')
+        trs = table.find_all('tr')
+        form = {e['name']: e.get('value', '') for e in table.find_all('input', {'name': True})}
+        
+        if 'av_url' in form:
+            avatar_url = form['av_url']
+        else:
+            # This happens when a person is using one of the preselected
+            # avatars
+            avatar_url = table.find('img', class_='avatar')['src']
+        
+        member = Member(
+            id          = member_id,
+            name        = trs[0].text.strip().split("Editing Member: ")[1],
+            register_ip = trs[2].find_all('td')[1].text,
+            last_active = zetadate(trs[3].find_all('td')[1].text),
+            email       = form['email'],
+            post_count  = form['postcount'],
+            warning_level = form['warned'],
+            title       = form['mem_title'],
+            group_id    = table.find(id='gid').find('option', selected=True)['value'],
+            location    = form['loc'],
+            aim         = form['aim'],
+            yim         = form['yim'],
+            msn         = form['msn'],
+            homepage    = form['www'],
+            interests   = table.find('textarea', {'name': 'interests'}).text.strip(),
+            signature   = table.find('textarea', {'name': 'sig'}).text.strip(),
+            photo_url   = form['photo'],
+            avatar_url  = avatar_url,
+            custom_fields = {}
+        )
+        
+        for key, value in form.items():
+            if key.startswith("choice_"):
+                field_id = int(key.split("_")[1])
+                member.custom_fields[field_id] = value
+        
+        for select in table.find_all('select'):
+            if select['name'].startswith("choice_"):
+                field_id = int(select['name'].split("_")[1])
+                member.custom_fields[field_id] = select.find('option', selected=True)['value']
+        
+        self.members.append(member)
     
     def scrape_all(self):
         self.scrape_front()
         
         self.scrape_member_list()
         
-        return
-        for forum in self.fora:
+        for member_id in self.member_ids[0:TEST_MAX]:
+            self.scrape_member_edit_page(member_id)
+        
+        for forum in self.fora[0:TEST_MAX]:
             self.scrape_forum(forum)
         
-        for topic in self.topics:
+        for topic in self.topics[0:TEST_MAX]:
             self.scrape_topic(topic)
         
-        for post in self.posts:
+        for post in self.posts[0:TEST_MAX]:
             self.scrape_post_source(post)
 
 zs = ZetaboardsScraper(board_url, config.BOARD_ADMIN_URL)
+
 zs.login(config.USERNAME, config.PASSWORD)
 
 if CASSETTE_NAME:
-    with zs.recorder.use_cassette(CASSETTE_NAME):
+    with zs.recorder.use_cassette(CASSETTE_NAME.rstrip('+'),
+        match_requests_on=['method', 'uri', 'body'],
+        record='new_episodes' if CASSETTE_NAME.endswith('+') else 'once'):
+        
+        #zs.login(config.USERNAME, config.PASSWORD)
         zs.scrape_all()
 else:
     zs.scrape_all()
+
+print("20/{} members:".format(len(zs.members)))
+
+for member in zs.members[0:30]:
+    print("* {}".format(member))
+
 
 print("20/{} topics:".format(len(zs.topics)))
 
@@ -326,8 +457,6 @@ print("20/{} posts:".format(len(zs.posts)))
 
 for p in zs.posts[0:30]:
     print("* {}".format(p))
-
-print("{} post sources.".format(len(zs.post_sources)))
 
 #for p in zs.post_sources[0:30]:
 #    print("* {}".format(p))

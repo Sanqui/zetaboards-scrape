@@ -3,8 +3,11 @@ attrs==16.3.0
 beautifulsoup4==4.5.3
 betamax==0.8.0
 bs4==0.0.1
+future==0.16.0
 packaging==16.8
+parsedatetime==2.2
 pyparsing==2.1.10
+python-dateutil==2.6.0
 PyYAML==3.12
 requests==2.13.0
 six==1.10.0
