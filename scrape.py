@@ -20,7 +20,7 @@ board_url = config.BOARD_URL
 CASSETTE_LIBRARY_DIR = 'cassettes/'
 CASSETTE_NAME = sys.argv[1] if len(sys.argv) > 1 else None
 
-TEST_MAX = 20
+TEST_MAX = 5
 
 DATETIME_FORMAT = "%b %d %Y, %I:%M %p"
 def zetadate(string):
@@ -117,7 +117,7 @@ class Post():
     url = attrib()
     edit_url = attrib()
     topic_id = attrib()
-    user_id = attrib()
+    member_id = attrib()
     number = attrib()
     post_datetime = attrib()
     ip = attrib()
@@ -130,6 +130,13 @@ class Post():
 class PostSource():
     id = attrib(convert=int)
     post_source = attrib()
+
+@attrs
+class Shout():
+    id = attrib(convert=int)
+    member_id = attrib(convert=int)
+    datetime = attrib()
+    text = attrib()
 
 def get_last_page(soup):
     ul_pages = soup.find('ul', class_='cat-pages')
@@ -152,6 +159,7 @@ class ZetaboardsScraper():
         self.post_sources = []
         self.member_ids = []
         self.members = []
+        self.shouts = []
         
         self.session = requests.Session()
         
@@ -307,7 +315,7 @@ class ZetaboardsScraper():
                 url         = postinfo.a['href'],
                 edit_url    = trs[3].find('td', class_='c_footicons').find(class_='left').a['href'],
                 topic_id    = topic.id,
-                user_id     = trs[0].find('a', class_='member')['href'].split('/')[-2],
+                member_id   = trs[0].find('a', class_='member')['href'].split('/')[-2],
                 number      = postinfo.a.text.split("#")[-1],
                 post_datetime = zetadate(postinfo.find(class_='left').text.strip()),
                 ip          = postinfo.find(class_='right').find(class_='desc').text.split('IP: ')[1].strip(),
@@ -411,6 +419,39 @@ class ZetaboardsScraper():
         
         self.members.append(member)
     
+    def scrape_shoutbox_page(self, page):
+        soup = self.get("{}stats/shout_archive/{}/".format(self.board_url, page))
+        
+        shouts = []
+        last_page = get_last_page(soup)
+        
+        for tr in soup.find('table', id="sbx_archive").find_all('tr'):
+            if not tr.find_all('td'): continue
+            delete_link = tr.find_all('td')[-1].find_all('a')[-1]
+            assert delete_link.text.strip() == "(X)"
+            shout_id = delete_link['onclick'].split('(')[1].rstrip(');')
+            delete_link.decompose()
+            
+            shout = Shout(
+                id = shout_id,
+                member_id = tr.find('a', class_='member')['href'].split('/')[-2],
+                datetime = zetadate(tr.find('td', class_='c_desc').find('small').text),
+                text = tr.find_all('td')[-1].encode_contents().strip()
+            )
+            
+            shouts.append(shout)
+        
+        return shouts, last_page
+    
+    def scrape_shoutbox(self):
+        shouts, last_page = self.scrape_shoutbox_page(1)
+        
+        for page in range(2, last_page+1):
+            shouts += self.scrape_shoutbox_page(page)[0]
+        
+        logging.info("Scraped {} shouts".format(len(shouts)))
+        self.shouts = shouts
+    
     def scrape_all(self):
         self.scrape_front()
         
@@ -418,6 +459,8 @@ class ZetaboardsScraper():
         
         for member_id in self.member_ids[0:TEST_MAX]:
             self.scrape_member_edit_page(member_id)
+        
+        self.scrape_shoutbox()
         
         for forum in self.fora[0:TEST_MAX]:
             self.scrape_forum(forum)
@@ -437,10 +480,15 @@ if CASSETTE_NAME:
         match_requests_on=['method', 'uri', 'body'],
         record='new_episodes' if CASSETTE_NAME.endswith('+') else 'once'):
         
-        #zs.login(config.USERNAME, config.PASSWORD)
         zs.scrape_all()
 else:
     zs.scrape_all()
+
+
+print("last 20 shouts:".format(len(zs.shouts)))
+
+for shout in zs.shouts[-20:-1]:
+    print("* {}".format(shout))
 
 print("20/{} members:".format(len(zs.members)))
 
