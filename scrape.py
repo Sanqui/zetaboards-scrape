@@ -19,6 +19,7 @@ board_url = config.BOARD_URL
 
 CASSETTE_LIBRARY_DIR = 'cassettes/'
 CASSETTE_NAME = sys.argv[1] if len(sys.argv) > 1 else None
+CASSETTE_NAME = CASSETTE_NAME.split(CASSETTE_LIBRARY_DIR)[-1]
 
 TEST_MAX = 5
 
@@ -138,6 +139,14 @@ class Shout():
     datetime = attrib()
     text = attrib()
 
+@attrs
+class Poll():
+    id = attrib(convert=int)
+    question = attrib()
+    num_choices = attrib()
+    exclusive = attrib()
+    answers = attrib()
+
 def get_last_page(soup):
     ul_pages = soup.find('ul', class_='cat-pages')
     if ul_pages:
@@ -160,6 +169,7 @@ class ZetaboardsScraper():
         self.member_ids = []
         self.members = []
         self.shouts = []
+        self.polls = []
         
         self.session = requests.Session()
         
@@ -297,7 +307,38 @@ class ZetaboardsScraper():
             
         logging.info("Scraped {} topics from forum {}".format(len(forum_topics), forum))
         self.topics += forum_topics
-
+    
+    def scrape_poll(self, topic, form_poll):
+        poll_id = form_poll['id'].split('poll')[1]
+        
+        num_choices = form_poll.find('span', style="float: left;").strong
+        if num_choices:
+            num_choices = int(num_choices.text.split(' choices')[0])
+        else:
+            num_choices = 1
+        
+        soup = self.get(topic.url+"1/", params={'results': poll_id})
+        
+        form_poll = soup.find('form', id="poll{}".format(poll_id))
+        
+        answers = []
+        
+        for tr in form_poll.find_all('tr')[2:-1]:
+            answer = str(tr.find('td', class_='c_poll-answer').contents[0]).strip()
+            votes = int(tr.find('td', class_='c_poll-votes').strong.text)
+            answers.append((answer, votes))
+        
+        poll = Poll(
+            id = poll_id,
+            question = form_poll.find('thead').text.strip(),
+            num_choices = num_choices,
+            exclusive = None, # TODO, this might require scraipng the edit page
+            answers = answers
+        )
+        
+        self.polls.append(poll)
+        
+    
     def scrape_topic_page(self, topic, page):
         soup = self.get("{}{}/?x={}".format(topic.url, page, 90))
         
@@ -305,6 +346,10 @@ class ZetaboardsScraper():
         posts = []
         
         table = soup.find('table', id='topic_viewer')
+        
+        if page == 1:
+            for table_poll in soup.find_all('table', class_='poll'):
+                self.scrape_poll(topic, table_poll.parent)
         
         topic_trs = table.find_all('tr')[2:-2]
         for post_trs in [topic_trs[i:i+5] for i in range(0, len(topic_trs), 5)]:
@@ -425,7 +470,11 @@ class ZetaboardsScraper():
         shouts = []
         last_page = get_last_page(soup)
         
-        for tr in soup.find('table', id="sbx_archive").find_all('tr'):
+        table_shoutbox = soup.find('table', id="sbx_archive")
+        if not table_shoutbox:
+            return [], -1
+        
+        for tr in table_shoutbox.find_all('tr'):
             if not tr.find_all('td'): continue
             delete_link = tr.find_all('td')[-1].find_all('a')[-1]
             assert delete_link.text.strip() == "(X)"
@@ -485,26 +534,16 @@ else:
     zs.scrape_all()
 
 
-print("last 20 shouts:".format(len(zs.shouts)))
+for items_name in "shouts members polls topics posts".split():
+    items = getattr(zs, items_name)
+    if items:
+        print("Example {} from a total of {}:".format(items_name, len(items)))
+        for i, item in enumerate(items[0:10]):
+            print(" [{}] {}".format(i, item))
+        print(" [{}] {}".format(len(items)-1, items[-1]))
+    else:
+        print("No {} scraped.".format(items_name))
 
-for shout in zs.shouts[-20:-1]:
-    print("* {}".format(shout))
-
-print("20/{} members:".format(len(zs.members)))
-
-for member in zs.members[0:30]:
-    print("* {}".format(member))
-
-
-print("20/{} topics:".format(len(zs.topics)))
-
-for topic in zs.topics[0:30]:
-    print("* {}".format(topic))
-
-print("20/{} posts:".format(len(zs.posts)))
-
-for p in zs.posts[0:30]:
-    print("* {}".format(p))
 
 #for p in zs.post_sources[0:30]:
 #    print("* {}".format(p))
