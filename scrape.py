@@ -131,6 +131,8 @@ class Post():
 class PostSource():
     id = attrib(convert=int)
     post_source = attrib()
+    include_signature = attrib()
+    display_emoticons = attrib()
 
 @attrs
 class PostRevision():
@@ -405,7 +407,9 @@ class ZetaboardsScraper():
         
         post_source = PostSource(
             id = post.id,
-            post_source = soup.find('textarea', id='c_post-text').text.strip()
+            post_source = soup.find('textarea', id='c_post-text').text.strip(),
+            include_signature = bool(soup.find('input', {'name':'sig'}).get('checked')),
+            display_emoticons = bool(soup.find('input', {'name':'emo'}).get('checked'))
         )
         
         self.post_sources.append(post_source)
