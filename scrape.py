@@ -133,6 +133,14 @@ class PostSource():
     post_source = attrib()
 
 @attrs
+class PostRevision():
+     post_id = attrib(convert=int)
+     member_id = attrib(convert=int)
+     ip = attrib()
+     datetime = attrib()
+     post_html = attrib()
+
+@attrs
 class Shout():
     id = attrib(convert=int)
     member_id = attrib(convert=int)
@@ -177,6 +185,7 @@ class ZetaboardsScraper():
         self.topics = []
         self.posts = []
         self.post_sources = []
+        self.post_revisions = []
         self.member_ids = []
         self.members = []
         self.shouts = []
@@ -401,6 +410,35 @@ class ZetaboardsScraper():
         
         self.post_sources.append(post_source)
     
+    def scrape_post_history(self, post):
+        post_soup = BS(post.post_html, 'html.parser')
+        editby = post_soup.find('div', class_='editby')
+        if not editby: return
+        editby.strong.decompose()
+        if not editby.a: return
+        edit_history_url = editby.a['href']
+        
+        soup = self.get(edit_history_url)
+        table = soup.find('table', id='mod_screen')
+        for tr in table.find_all('tr')[1:]:
+            tds = tr.find_all('td')
+            
+            # blah blah bs workaround
+            for br in tds[0].find_all("br"):
+                br.replace_with('\n')
+
+            lines = tds[0].text.strip().split('\n')
+            
+            post_revision = PostRevision(
+                post_id = post.id,
+                member_id = tds[0].a['href'].split('/')[-2],
+                ip = lines[1].split(":")[1].strip(),
+                datetime = zetadate(lines[2].split(":")[1].strip()),
+                post_html = tds[1].encode_contents().strip()
+            )
+        
+            self.post_revisions.append(post_revision)
+    
     def scrape_member_list_page(self, page):
         params = {'sort': 'join_unix', 'order': 'a'}
         soup = self.get(self.board_url+"members/{}".format(page), params=params)
@@ -572,6 +610,7 @@ class ZetaboardsScraper():
         
         for post in self.posts[0:TEST_MAX]:
             self.scrape_post_source(post)
+            self.scrape_post_history(post)
 
 zs = ZetaboardsScraper(board_url, config.BOARD_ADMIN_URL)
 
