@@ -147,6 +147,17 @@ class Poll():
     exclusive = attrib()
     answers = attrib()
 
+@attrs
+class CustomProfileField():
+    id = attrib(convert=int)
+    title = attrib()
+    on_registration = attrib()
+    admin_only = attrib()
+    show_in_topics = attrib()
+    type = attrib()
+    multiple_choices = attrib()
+    choices = attrib()
+
 def get_last_page(soup):
     ul_pages = soup.find('ul', class_='cat-pages')
     if ul_pages:
@@ -170,6 +181,7 @@ class ZetaboardsScraper():
         self.members = []
         self.shouts = []
         self.polls = []
+        self.custom_profile_fields = []
         
         self.session = requests.Session()
         
@@ -501,8 +513,49 @@ class ZetaboardsScraper():
         logging.info("Scraped {} shouts".format(len(shouts)))
         self.shouts = shouts
     
+    def scrape_custom_profile_fields(self):
+        soup = self.get(self.board_admin_url, params={'menu': 'mem', 'c': 32})
+        
+        for tr in soup.find_all('table')[0].find_all('tr')[2:]:
+            tds = tr.find_all('td')
+            title = tds[0].text.strip()
+            type = tds[1].text.strip()
+            edit_url = tds[3].a['href']
+            id = edit_url.split('=')[-1]
+            
+            soup_edit = self.get(edit_url)
+            def radio(name):
+                input = soup_edit.find('input', {'name': name, 'value': 1})
+                if not input:
+                    return None
+                return bool(input.get('checked', False))
+            
+            allow_multiple = None
+            choices = []
+            
+            if type == "Multiple choice":
+                for input in soup_edit.find_all('input'):
+                    if input['name'].startswith('old_choice'):
+                        choices.append(input['value'])
+            
+            
+            field = CustomProfileField(
+                id = id,
+                title = title,
+                type = type,
+                on_registration = radio('reg_optional'),
+                admin_only = radio('admin_edit_only'),
+                show_in_topics = radio('topic_view'),
+                multiple_choices = radio('maxlen'), # maxlen, seriously zetaboards?
+                choices = choices
+            )
+            
+            self.custom_profile_fields.append(field)
+    
     def scrape_all(self):
         self.scrape_front()
+        
+        self.scrape_custom_profile_fields()
         
         self.scrape_member_list()
         
@@ -534,7 +587,7 @@ else:
     zs.scrape_all()
 
 
-for items_name in "shouts members polls topics posts".split():
+for items_name in "custom_profile_fields shouts members polls topics posts".split():
     items = getattr(zs, items_name)
     if items:
         print("Example {} from a total of {}:".format(items_name, len(items)))
